@@ -1,3 +1,4 @@
+// middleware/auth.js
 const crypto = require("crypto");
 const axios = require("axios");
 
@@ -16,7 +17,6 @@ function auth(req, res, next) {
   }
 
   const expected = process.env.API_TOKEN || "";
-  // Constant-time compare
   const a = Buffer.from(token);
   const b = Buffer.from(expected);
 
@@ -27,7 +27,17 @@ function auth(req, res, next) {
   return next();
 }
 
-async function sfLogin() {
+/**
+ * Logs in to Salesforce and caches token for TTL ms.
+ * Defensive null handling + try/catch around the DML-equivalent callout.
+ */
+async function sfLogin({ ttlMs = 55 * 60 * 1000 } = {}) {
+  // Reuse cached token if still fresh
+
+  if (authState.accessToken && Date.now() - authState.issuedAt < ttlMs) {
+    return authState;
+  }
+
   const {
     SF_GRANT_TYPE,
     SF_CLIENT_ID,
@@ -37,23 +47,44 @@ async function sfLogin() {
     SF_LOGIN_URL
   } = process.env;
 
-  const body = new URLSearchParams();
-  body.set('grant_type', SF_GRANT_TYPE);
-  body.set('client_id', SF_CLIENT_ID);
-  body.set('client_secret', SF_CLIENT_SECRET);
-  body.set('username', SF_USERNAME);
-  body.set('password', SF_PASSWORD);
+  try {
+    const body = new URLSearchParams();
+    body.set("grant_type", SF_GRANT_TYPE || "password");
+    body.set("client_id", SF_CLIENT_ID || "");
+    body.set("client_secret", SF_CLIENT_SECRET || "");
+    body.set("username", SF_USERNAME || "");
+    body.set("password", SF_PASSWORD || "");
 
-  const tokenUrl = `${SF_LOGIN_URL}/services/oauth2/token`;
-  const res = await axios.post(tokenUrl, body.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-  });
-  
-  authState.instanceUrl = res.data.instance_url;
-  authState.accessToken = res.data.access_token;
-  authState.issuedAt = Date.now();
+    const tokenUrl = `${(SF_LOGIN_URL || "https://login.salesforce.com")
+      .replace(/\/+$/, "")}/services/oauth2/token`;
 
-  //log.info('Salesforce auth success.');
+    const res = await axios.post(tokenUrl, body.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 15000,
+      validateStatus: s => s >= 200 && s < 500
+    });
+
+    if (res.status >= 400) {
+      throw new Error(`Salesforce auth failed ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+
+    const instanceUrl = res?.data?.instance_url || null;
+    const accessToken = res?.data?.access_token || null;
+
+    if (!instanceUrl || !accessToken) {
+      throw new Error("Salesforce auth response missing instance_url or access_token");
+    }
+
+    authState.instanceUrl = instanceUrl;
+    authState.accessToken = accessToken;
+    authState.issuedAt = Date.now();
+
+    return authState;
+  } catch (e) {
+    // Informative, safe error
+    const msg = e?.message || "Unknown Salesforce auth error";
+    throw new Error(`sfLogin() exception: ${msg}`);
+  }
 }
 
 module.exports = { auth, authState, sfLogin };

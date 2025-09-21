@@ -7,6 +7,7 @@ const { ipKeyGenerator } = require("express-rate-limit");
 const { auth } = require("./middleware/auth");
 const tradesRouter = require("./routes/trades");
 const martingaleRouter = require("./metaapi/martingale");
+const accountsRouter = require("./routes/accounts");
 
 /**
  * Build the app with injected dependencies (so tests can stub them).
@@ -51,6 +52,7 @@ function createApp({ allowIps = new Set(), allowHosts = new Set(), deps = {} } =
   // Routes (inject auth + deps if needed)
   app.use("/api/trades", tradesRouter(auth, deps));
   app.use("/api/trades", martingaleRouter(auth, deps));
+  app.use("/api/accounts", accountsRouter(auth, deps));
 
   // Healthcheck
   app.get("/healthz", (_req, res) => res.send("ok"));
