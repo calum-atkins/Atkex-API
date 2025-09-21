@@ -1,6 +1,6 @@
 // routes/accounts.js
 const express = require("express");
-const { fetchAccountInfo } = require("../metaapi/accounts");
+const { fetchAccountInfo, createTradingAccount } = require("../metaapi/accounts");
 const { updateTradingAccount } = require("../salesforce/accounts");
 const { authState, sfLogin } = require("../middleware/auth");
 
@@ -73,6 +73,16 @@ function accountsRouter(auth, deps = {}) {
       return res.status(502).json({ ok: false, error: message });
     }
   });
+  
+  
+  router.post('/create-account', auth, async (req, res) => {
+  try {
+    const result = await createTradingAccount(req.body);
+    res.status(result.status || 200).json(result);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || 'Unknown error' });
+  }
+});
 
   return router;
 }

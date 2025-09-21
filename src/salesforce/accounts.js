@@ -74,6 +74,39 @@ async function updateTradingAccount({
   }
 }
 
-module.exports = {
-  updateTradingAccount,
+/**
+ * Set MetaTrader_Id__c on Trading_Account__c.
+ * Null handling: throws if required params are missing.
+ * Try/catch around REST (DML equivalent).
+ */
+async function setMetaTraderId({
+  tradingAccountId,
+  metaTraderId
+}, { instanceUrl, accessToken } = {}) {
+  if (!tradingAccountId) throw new Error('tradingAccountId is required');
+  if (!metaTraderId) throw new Error('metaTraderId is required');
+  if (!instanceUrl) throw new Error('instanceUrl is required');
+  if (!accessToken) throw new Error('accessToken is required');
+
+  const url = `${instanceUrl.replace(/\/+$/, '')}/services/data/v60.0/sobjects/Trading_Account__c/${encodeURIComponent(tradingAccountId)}`;
+  const body = { MetaTrader_Id__c: metaTraderId };
+
+  try {
+    const res = await axios.patch(url, body, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 20000
+    });
+    return { status: res?.status ?? 0 };
+  } catch (err) {
+    const msg = err?.response?.data || err?.message || err;
+    console.error('setMetaTraderId error:', msg);
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+}
+
+module.exports = { 
+  updateTradingAccount, setMetaTraderId
 };
