@@ -102,11 +102,15 @@ async function placeLimitOrder({ baseUrl, token, accountId, symbol, lotSize, sid
  */
 function computeThreeLevels(entry, stopLoss) {
   const delta = stopLoss - entry;                // could be negative or positive
-  const step = delta / 4;
+  const step = delta / 8;
   const l1 = entry + step;                       // 25% toward SL
   const l2 = entry + 2 * step;                   // 50% toward SL
   const l3 = entry + 3 * step;                   // 75% toward SL
-  return [l1, l2, l3];
+  const l4 = entry + 4 * step;                   // 75% toward SL
+  const l5 = entry + 5 * step;                   // 75% toward SL
+  const l6 = entry + 6 * step;                   // 75% toward SL
+  const l7 = entry + 7 * step;                   // 75% toward SL
+  return [l1, l2, l3, l4, l5, l6, l7];
 }
 
 /** -------- Router factory (so you can inject your auth middleware) -------- */
