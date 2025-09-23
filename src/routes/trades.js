@@ -14,6 +14,75 @@ function parseIsoOrNull(s) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+// Null/empty guards
+function isNonEmptyString(v){ return typeof v === "string" && v.trim().length>0; }
+function isNum(n){ return typeof n === "number" && Number.isFinite(n); }
+
+// Only overwrite if incoming has a value; otherwise keep existing
+function mergePreservingOpen(existing = {}, incoming = {}) {
+  const out = { ...existing, ...incoming };
+
+  // Fields you said were being wiped:
+  const preserveIfMissing = [
+    "Units__c",                 // trade size
+    "Side__c",                  // BUY/SELL
+    "Open_Screenshot_URL__c",   // or whatever your API name is
+    "Open_Comments__c"
+  ];
+
+  for (const f of preserveIfMissing) {
+    const newHasValue =
+      incoming.hasOwnProperty(f) &&
+      incoming[f] !== null &&
+      incoming[f] !== undefined &&
+      !(typeof incoming[f] === "string" && incoming[f].trim() === "");
+
+    if (!newHasValue && existing[f] != null) {
+      out[f] = existing[f];
+    }
+  }
+
+  // SL -> BE rule: only if we actually have a positive final profit
+  // (adjust field API name if yours differs)
+  if (out.Outcome__c === "SL" && isNum(out.Final_Profit__c) && out.Final_Profit__c > 0) {
+    out.Outcome__c = "BE";
+  }
+
+  return out;
+}
+
+// Bulk fetch existing Hedge__c by UUID_Text__c for merge
+async function fetchExistingHedgesByUUID({ instanceUrl, accessToken, uuids = [] }) {
+  const map = new Map();
+  if (!instanceUrl || !accessToken || !uuids || uuids.length === 0) return map;
+
+  // SOQL IN clause chunking (<= 1000 items per chunk is safe)
+  const chunks = [];
+  for (let i = 0; i < uuids.length; i += 500) chunks.push(uuids.slice(i, i + 500));
+
+  for (const ch of chunks) {
+    const quoted = ch.map(u => `'${String(u).replace(/'/g, "\\'")}'`).join(",");
+    const soql =
+      `SELECT Id, UUID_Text__c, Units__c, Side__c, Open_Screenshot_URL__c, Open_Comments__c, Outcome__c, Final_Profit__c
+         FROM Hedge__c
+        WHERE UUID_Text__c IN (${quoted})`;
+
+    const url = `${instanceUrl}/services/data/v59.0/query`;
+    const resp = await axios.get(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: { q: soql },
+      timeout: 15000
+    });
+
+    const recs = Array.isArray(resp?.data?.records) ? resp.data.records : [];
+    for (const r of recs) {
+      if (isNonEmptyString(r.UUID_Text__c)) map.set(r.UUID_Text__c, r);
+    }
+  }
+
+  return map;
+}
+
 /**
  * Build the MetaTrader history URL for an account and time range.
  */
@@ -100,12 +169,35 @@ module.exports = (auth, deps = {}) => {
       // --- 4) Login to Salesforce (if your helper needs it)
       // await sfLogin();
 
+      // --- 4.5) Load existing hedges (to avoid wiping open data)
+      //await sfLogin(); // ensure authState is set
+      const uuids = hedgesForUpsert.map(h => h?.UUID_Text__c).filter(isNonEmptyString);
+
+      // Pull once (mass retrieval before any loop)
+      let existingByUUID = new Map();
+      try {
+        existingByUUID = await fetchExistingHedgesByUUID({
+          instanceUrl: authState.instanceUrl,
+          accessToken: authState.accessToken,
+          uuids
+        });
+      } catch (e) {
+        console.error("Failed to prefetch existing Hedge__c:", e?.response?.data || e?.message || e);
+        // Non-fatal: we can proceed without merge, but open info might be overwritten
+      }
+
+      // Merge each incoming row with existing (non-destructive)
+      const mergedForUpsert = hedgesForUpsert.map(incoming => {
+        const key = incoming?.UUID_Text__c;
+        const existing = key ? existingByUUID.get(key) : null;
+        return existing ? mergePreservingOpen(existing, incoming) : mergePreservingOpen({}, incoming);
+      });
+
       // --- 5) Batch upsert in a single call (no DML in loops)
       let sfResults = [];
       try {
-        sfResults = await sfBatchUpsertHedgesByUUID(hedgesForUpsert);
+        sfResults = await sfBatchUpsertHedgesByUUID(mergedForUpsert);
       } catch (e) {
-        // Upsert failure handled distinctly so you can see MT vs SF failure
         console.error("sfBatchUpsertHedgesByUUID failed:", e?.response?.data || e?.message || e);
         return res.status(502).json({ error: "Salesforce upsert failed", details: e?.message || "Unknown error" });
       }

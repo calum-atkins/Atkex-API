@@ -27,13 +27,24 @@ function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
+function splitMulti(ms) {
+  if (!ms || typeof ms !== "string") return undefined; // null-guard -> omit field
+  // SF multiselects are semicolon-separated; trim empties
+  return ms.split(';').map(s => s.trim()).filter(Boolean);
+}
+
 // Pull Subscriber__c + related Trading_Account + child Strategy_Subscriptions in one go
 async function loadSfSubscriber({ instanceUrl, accessToken, sfSubscriberId }) {
   if (!instanceUrl || !accessToken || !sfSubscriberId) return null; // null-guard
   const soql =
     `SELECT Id, Name, Trading_Account__c, ` +
     `       Trading_Account__r.MetaTrader_ID__c, ` +
-    `       (SELECT Id, Name, Multiplier__c, Active__c, Strategy__r.External_Id__c ` +
+    `       (SELECT Id, Name, Multiplier__c, Active__c, Strategy__r.External_Id__c, Reverse__c,
+        Skip_Pending_Orders__c,
+        Copy_Stop_Loss__c,
+        Copy_Take_Profit__c,
+        Included_Symbols__c,
+        Exclude_Symbols__c` +
     `          FROM Strategy_Subscriptions__r) ` +
     `  FROM Subscriber__c ` +
     ` WHERE Id = '${sfSubscriberId.replace(/'/g, "\\'")}'`;
@@ -103,20 +114,42 @@ module.exports = (authMw) => {
       const children = (sub?.Strategy_Subscriptions__r?.records || []).filter(c => c?.Active__c === true);
 
       const subscriptions = [];
-      for (const c of children) {
-        const strategyId = c?.Strategy__r.External_Id__c;
-        const multiplier = (typeof c?.Multiplier__c === "number" && isFinite(c.Multiplier__c))
-          ? c.Multiplier__c
-          : 1;
-        if (!isNonEmptyString(strategyId)) continue; // skip incomplete child rows
+		for (const c of (sub?.Strategy_Subscriptions__r?.records || []).filter(r => r?.Active__c === true)) {
+		  // Resolve strategyId from preferred locations
+		  const strategyId =
+			(c?.Strategy__r?.External_Id__c && String(c.Strategy__r.External_Id__c)) ||
+			(c?.StrategyId__c && String(c.StrategyId__c)) ||
+			null;
 
-        subscriptions.push(stripNulls({
-          strategyId,
-          multiplier
-          // If you store scaling fields on the child later, map them here:
-          // tradeSizeScaling: { mode: "none" }
-        }));
-      }
+		  if (!isNonEmptyString(strategyId)) continue; // skip incomplete rows
+
+		  const multiplier = (typeof c?.Multiplier__c === "number" && isFinite(c.Multiplier__c))
+			? c.Multiplier__c
+			: 1;
+
+		  // Multi-select picklists -> arrays
+		  const included = splitMulti(c?.Included_Symbols__c);
+		  const excluded = splitMulti(c?.Exclude_Symbols__c);
+
+		  // Build one subscription payload
+		  const subPayload = stripNulls({
+			strategyId,
+			multiplier,
+			reverse: !!c?.Reverse__c,
+			skipPendingOrders: !!c?.Skip_Pending_Orders__c,
+			copyStopLoss: !!c?.Copy_Stop_Loss__c,
+			copyTakeProfit: !!c?.Copy_Take_Profit__c,
+			// CopyFactory accepts symbol filters per subscription. Common shape:
+			// { included: ["EURUSD"], excluded: ["XAUUSD"] }
+			symbolFilter: stripNulls({
+			  included,  // omitted if undefined/empty
+			  excluded
+			})
+			// tradeSizeScaling: {...} // add later if you store per-sub fields for scaling
+		  });
+
+		  subscriptions.push(subPayload);
+		}
 
       if (subscriptions.length === 0) {
         return res.status(400).json({
