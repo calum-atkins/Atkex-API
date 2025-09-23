@@ -9,6 +9,7 @@ const tradesRouter = require("./routes/trades");
 const martingaleRouter = require("./metaapi/martingale");
 const strategyRouter = require("./metaapi/strategy");
 const accountsRouter = require("./routes/accounts");
+const subscriberRouter = require("./metaapi/subscriber");
 
 /**
  * Build the app with injected dependencies (so tests can stub them).
@@ -55,6 +56,7 @@ function createApp({ allowIps = new Set(), allowHosts = new Set(), deps = {} } =
   app.use("/api/trades", martingaleRouter(auth, deps));
   app.use("/api/accounts", accountsRouter(auth, deps));
   app.use("/api/strategy", strategyRouter(auth, deps));
+  app.use("/api/subscriber", subscriberRouter (auth, deps));
 
   // Healthcheck
   app.get("/healthz", (_req, res) => res.send("ok"));

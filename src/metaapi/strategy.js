@@ -54,10 +54,10 @@ function mapToCopyFactoryPayload(sf) {
   // - Scale__c == 'Risk'         -> risk-fixed-fraction using Risk_Percentage__c / 100
   // - otherwise                  -> none
   let tradeSizeScaling = { mode: "none" };
-
-  if (sf.Scale__c === "Fixed" && sf.Fixed_Lot_Size__c != null) {
+console.log('scale ' + sf.Scale__c);
+  if (sf.Scale__c === "Fixed lot size" && sf.Fixed_Lot_Size__c != null) {
     tradeSizeScaling = {
-      mode: "fixed-volume",
+      mode: "fixedVolume",
       tradeVolume: Number(sf.Fixed_Lot_Size__c)
     };
   } else if (sf.Scale__c === "Risk" && sf.Risk_Percentage__c != null) {
