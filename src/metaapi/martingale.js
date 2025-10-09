@@ -92,26 +92,45 @@ async function placeLimitOrder({ baseUrl, token, accountId, symbol, lotSize, sid
   return resp.data;
 }
 
-/** -------- Price ladder helper --------
- * Evenly space 3 prices between entry and stopLoss (exclusive of entry, inclusive of SL?).
- * We'll create 3 internal levels strictly between entry and stopLoss:
- *   L1 = entry + 1/4*(SL-entry)
- *   L2 = entry + 2/4*(SL-entry)
- *   L3 = entry + 3/4*(SL-entry)
- * This ensures 3 equal gaps from entry towards SL.
- */
-function computeThreeLevels(entry, stopLoss) {
-  const delta = stopLoss - entry;                // could be negative or positive
-  const step = delta / 8;
-  const l1 = entry + step;                       // 25% toward SL
-  const l2 = entry + 2 * step;                   // 50% toward SL
-  const l3 = entry + 3 * step;                   // 75% toward SL
-  const l4 = entry + 4 * step;                   // 75% toward SL
-  const l5 = entry + 5 * step;                   // 75% toward SL
-  const l6 = entry + 6 * step;                   // 75% toward SL
-  const l7 = entry + 7 * step;                   // 75% toward SL
-  return [l1, l2, l3, l4, l5, l6, l7];
+/** -------- Price ladder helpers -------- */
+
+// 5 levels excluding 2 closest to target (SL or TP)
+function computeFiveLevelsTowardTarget(entry, target) {
+  if (
+    entry == null || target == null ||
+    Number.isNaN(entry) || Number.isNaN(target) ||
+    !Number.isFinite(entry) || !Number.isFinite(target) ||
+    entry === target
+  ) return [];
+
+  // N=5 desired, exclude E=2 near target → split into 7 equal segments
+  const step = (target - entry) / 8;
+  const levels = [];
+  for (let i = 1; i <= 5; i++) {
+    levels.push(entry + i * step);
+  }
+  return levels;
 }
+
+// Decide LIMIT vs STOP from side and level relative to entry
+function actionTypeForPending(side, levelPrice, entry) {
+  if (side === "BUY") {
+    // BUY below entry = BUY_LIMIT; above entry = BUY_STOP
+    return levelPrice < entry ? "ORDER_TYPE_BUY_LIMIT" : "ORDER_TYPE_BUY_STOP";
+  } else {
+    // SELL above entry = SELL_LIMIT; below entry = SELL_STOP
+    return levelPrice > entry ? "ORDER_TYPE_SELL_LIMIT" : "ORDER_TYPE_SELL_STOP";
+  }
+}
+
+async function placePending({ baseUrl, token, accountId, symbol, lotSize, actionType, openPrice, stopLoss, takeProfit }) {
+  const url = `${baseUrl}/users/current/accounts/${accountId}/trade`;
+  const headers = { "auth-token": token, "Content-Type": "application/json" };
+  const payload = { symbol, volume: lotSize, actionType, openPrice, stopLoss, takeProfit };
+  const resp = await axios.post(url, payload, { headers });
+  return resp.data;
+}
+
 
 /** -------- Router factory (so you can inject your auth middleware) -------- */
 module.exports = (auth) => {
@@ -123,68 +142,56 @@ module.exports = (auth) => {
    */
   router.post("/place/martingale", auth, async (req, res) => {
     try {
-      const { symbol, lotSize, stopLoss, entry, side, accountId, takeProfit } = req.body || {};
+      const {
+        symbol, lotSize, stopLoss, entry, side, accountId, takeProfit,
+        ladderTowards = "SL" // "SL" (default) or "TP"
+      } = req.body || {};
 
-      // Basic validation
       const normSide = normalizeSide(side);
       if (!symbol || !normSide || !isNumber(lotSize) || !isNumber(stopLoss) || !isNumber(entry) || !isNumber(takeProfit)) {
-        return res.status(400).json({
-          error: "Required fields: symbol (string), lotSize (number), stopLoss (number), takeProfit (number), entry (number), side ('BUY'|'SELL')"
-        });
+        return res.status(400).json({ error: "Required fields: symbol, lotSize, stopLoss, takeProfit, entry, side" });
       }
 
-      // Login / prepare Meta API
       const { baseUrl, token } = await metaLogin();
 
-      // 1) Place the market order now (execution at current price) with SL
+      // 1) market order
       const marketResp = await placeMarketOrder({
-        baseUrl,
-        token,
-        accountId,
-        symbol,
-        lotSize,
-        side: normSide,
-        stopLoss,
-        takeProfit
+        baseUrl, token, accountId, symbol, lotSize, side: normSide, stopLoss, takeProfit
       });
 
-      // 2) Compute the three equal levels between entry and SL
-      const levels = computeThreeLevels(entry, stopLoss);
+      // 2) pick the target we ladder toward
+      const target = ladderTowards === "TP" ? takeProfit : stopLoss;
 
-      // 3) Place 3 limit orders at those levels (all with same SL)
+      // 3) compute 5 levels toward the chosen target, excluding 2 closest to it
+      let levels = computeFiveLevelsTowardTarget(entry, target);
+
+      // Optional: tick normalization + dedupe
+      const TICK = Number(process.env.DEFAULT_TICK || "0.01");
+      const toTick = p => Math.round(p / TICK) * TICK;
+      levels = Array.from(new Set(levels.map(toTick))).filter(p => p !== entry);
+
+      // 4) place pending orders; choose LIMIT vs STOP correctly
       const limitResults = [];
       for (const openPrice of levels) {
-        // For true “martingale”, you might want to multiply lot size on each step.
-        // You asked to keep lot size as given, so we use the same lotSize for all.
-        // If you want x2, x3 scaling later, we can adjust here.
-        // BUY => BUY_LIMIT below current ask; SELL => SELL_LIMIT above current bid.
-        // We assume the provider enforces correct price/side semantics.
-        // If needed, add guards to ensure the limit is properly placed wrt current market.
-        const r = await placeLimitOrder({
-          baseUrl,
-          token,
-          accountId,
-          symbol,
-          lotSize,
-          side: normSide,
-          openPrice,
-          stopLoss,
-          takeProfit
+        const actionType = actionTypeForPending(normSide, openPrice, entry);
+        const r = await placePending({
+          baseUrl, token, accountId, symbol, lotSize, actionType, openPrice, stopLoss, takeProfit
         });
-        limitResults.push({ openPrice, response: r });
+        limitResults.push({ openPrice, actionType, response: r });
       }
 
       return res.json({
         ok: true,
-        requested: { symbol, lotSize, stopLoss, entry, side: normSide },
+        requested: { symbol, lotSize, stopLoss, takeProfit, entry, side: normSide, ladderTowards },
         marketOrder: marketResp,
-        limitOrders: limitResults
+        pendingOrders: limitResults
       });
     } catch (err) {
       console.error("[MARTINGALE ERROR]", err.response?.data || err.message);
       return res.status(500).json({ error: "Failed to place martingale orders" });
     }
   });
+
 
   return router;
 };

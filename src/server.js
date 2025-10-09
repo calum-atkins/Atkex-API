@@ -4,7 +4,7 @@ require("dotenv").config();
 const http = require("http");
 const { createApp } = require("./app");
 const { SymbolCatalog } = require("./salesforce/symbolCatalog"); // your Pi-side cache
-const { authState, sfLogin } = require("./middleware/auth");
+const { auth, authState, sfLogin } = require("./middleware/auth");
 
 (async () => {
   // Build allow lists from env (null-safe)

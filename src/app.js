@@ -10,6 +10,7 @@ const martingaleRouter = require("./metaapi/martingale");
 const strategyRouter = require("./metaapi/strategy");
 const accountsRouter = require("./routes/accounts");
 const subscriberRouter = require("./metaapi/subscriber");
+const positionsRouter = require("./routes/positions");
 
 /**
  * Build the app with injected dependencies (so tests can stub them).
@@ -42,12 +43,14 @@ function createApp({ allowIps = new Set(), allowHosts = new Set(), deps = {} } =
         allowHosts.has((req.hostname || "").toLowerCase()),
     })
   );
+  
 
   // Block everyone else early
   app.use((req, res, next) => {
     const ipAllowed = allowIps.has(req.ip);
     const hostAllowed = allowHosts.has((req.hostname || "").toLowerCase());
     if (ipAllowed || hostAllowed) return next();
+    
     return res.status(403).send("Forbidden");
   });
 
@@ -57,6 +60,7 @@ function createApp({ allowIps = new Set(), allowHosts = new Set(), deps = {} } =
   app.use("/api/accounts", accountsRouter(auth, deps));
   app.use("/api/strategy", strategyRouter(auth, deps));
   app.use("/api/subscriber", subscriberRouter (auth, deps));
+  app.use("/api/position", positionsRouter (auth, deps));
 
   // Healthcheck
   app.get("/healthz", (_req, res) => res.send("ok"));

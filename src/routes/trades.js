@@ -1,7 +1,7 @@
 // routes/importMetatrader.js
 const express = require("express");
 const axios = require("axios");
-const { sfLogin } = require("../middleware/auth");
+const { sfLogin, authState } = require("../middleware/auth");
 const { sfBatchUpsertHedgesByUUID } = require("../salesforce/upsert");
 const { consolidateDealsToHedges } = require("../logic/consolidate");
 
@@ -23,12 +23,15 @@ function mergePreservingOpen(existing = {}, incoming = {}) {
   const out = { ...existing, ...incoming };
 
   // Fields you said were being wiped:
-  const preserveIfMissing = [
-    "Units__c",                 // trade size
+  const preserveIfMissing = [ 
     "Side__c",                  // BUY/SELL
-    "Open_Screenshot_URL__c",   // or whatever your API name is
-    "Open_Comments__c"
-  ];
+    "X1st_Trade_Open_Price__c",   // or whatever your API name is
+    "X1st_Trade_Units__c",
+    "Open_Date_Time__c",
+    "Open_Comments__c",
+    "Open_Screenshot__c"
+  ];// Side from your computed net; fixes the ternary that referenced entryType wrongly
+  
 
   for (const f of preserveIfMissing) {
     const newHasValue =
@@ -63,8 +66,8 @@ async function fetchExistingHedgesByUUID({ instanceUrl, accessToken, uuids = [] 
   for (const ch of chunks) {
     const quoted = ch.map(u => `'${String(u).replace(/'/g, "\\'")}'`).join(",");
     const soql =
-      `SELECT Id, UUID_Text__c, Units__c, Side__c, Open_Screenshot_URL__c, Open_Comments__c, Outcome__c, Final_Profit__c
-         FROM Hedge__c
+      `SELECT Id, UUID_Text__c, Side__c,X1st_Trade_Open_Price__c, X1st_Trade_Units__c,Open_Date_Time__c,Open_Comments__c,Open_Screenshot__c 
+         FROM SR_Hedge__c
         WHERE UUID_Text__c IN (${quoted})`;
 
     const url = `${instanceUrl}/services/data/v59.0/query`;
@@ -189,6 +192,7 @@ module.exports = (auth, deps = {}) => {
       // Merge each incoming row with existing (non-destructive)
       const mergedForUpsert = hedgesForUpsert.map(incoming => {
         const key = incoming?.UUID_Text__c;
+        
         const existing = key ? existingByUUID.get(key) : null;
         return existing ? mergePreservingOpen(existing, incoming) : mergePreservingOpen({}, incoming);
       });

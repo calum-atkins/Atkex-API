@@ -20,6 +20,12 @@ function stripNulls(obj) {
   return out;
 }
 
+// Multi-select splitter (SF stores as 'EURUSD;GBPUSD;XAUUSD')
+function splitMulti(ms) {
+  if (!ms || typeof ms !== "string") return undefined; // null-guard -> omit
+  return ms.split(";").map(s => s.trim()).filter(Boolean);
+}
+
 // OPTIONAL: pull fields from Salesforce by Strategy__c Id (if you’d rather send just the SF Id)
 // Requires you to have instanceUrl/accessToken in memory (your existing sfLogin() flow)
 async function loadSfStrategy({ instanceUrl, accessToken, strategyId }) {
@@ -35,7 +41,9 @@ async function loadSfStrategy({ instanceUrl, accessToken, strategyId }) {
     "Copy_Take_Profit__c",
     "Scale__c",                     // Picklist: e.g. Fixed, Risk, None
     "Fixed_Lot_Size__c",            // Number(4,2)
-    "Risk_Percentage__c"            // Number(2,2) e.g. 2.00 => 2%
+    "Risk_Percentage__c",           // Number(2,2) e.g. 2.00 => 2%
+    "Included_Symbols__c",          // NEW
+    "Exclude_Symbols__c"            // NEW
   ];
 
   const url = `${instanceUrl}/services/data/v59.0/sobjects/Strategy__c/${encodeURIComponent(strategyId)}?fields=${fields.join(",")}`;
@@ -59,35 +67,53 @@ function mapToCopyFactoryPayload(sf) {
       mode: "fixedVolume",
       tradeVolume: Number(sf.Fixed_Lot_Size__c)
     };
-  } else if (sf.Scale__c === "Risk" && sf.Risk_Percentage__c != null) {
+  } else if (sf.Scale__c === "Fixed risk" && sf.Risk_Percentage__c != null) {
     // API expects a fraction (0.02 for 2%), while SF stores percent like 2.00
     tradeSizeScaling = {
-      mode: "risk-fixed-fraction",
+      mode: "fixedRisk",
       riskFraction: Number(sf.Risk_Percentage__c) / 100
     };
+  } else if (sf.Scale__c === "Scale by balance") {
+    tradeSizeScaling = {
+      mode: "balance"
+    };
+  } else if (sf.Scale__c === "Scale by equity")  {
+    tradeSizeScaling = {
+      mode: "equity"
+    };
+  } else if (sf.Scale__c === "Scale by contract size") {
+    tradeSizeScaling = {
+      mode: "contractSize"
+    };
+  } else if (sf.Scale__c === "Do not scale" ) {
+    tradeSizeScaling = {
+      mode: "none"
+    };
   }
+
+  // NEW: symbol filters
+  const included = splitMulti(sf.Included_Symbols__c); // array or undefined
+  const excluded = splitMulti(sf.Exclude_Symbols__c);  // array or undefined
+  const symbolFilter = stripNulls({ included, excluded }); // stripped if both empty
 
   const payload = {
     name: sf.Name ?? undefined,
     description: sf.Description__c ?? undefined,
     skipPendingOrders: !!sf.Skip_Pending_Orders__c,
-    // You can pass accountId from the request (preferred),
-    // or derive from Trading_Account__c via an extra lookup if you store the CopyFactory account id there.
     reverse: !!sf.Reverse__c,
     copyStopLoss: !!sf.Copy_Stop_Loss__c,
     copyTakeProfit: !!sf.Copy_Take_Profit__c,
-    tradeSizeScaling
-    // Add other sections (filters, limits, etc.) later as you add fields in SF
+    tradeSizeScaling,
+    symbolFilter // omitted automatically if empty via stripNulls below
   };
 
   return stripNulls(payload);
 }
 
-
 /** -------- Router factory (so you can inject your auth middleware) -------- */
 module.exports = (auth) => {
   const router = express.Router();
-  
+
   /**
    * GET /api/meta/strategies/new-id
    * Calls CopyFactory unused-strategy-id endpoint and returns the id
@@ -119,82 +145,76 @@ module.exports = (auth) => {
       });
     }
   });
-  
 
-	/**
-	 * PUT /api/meta/strategies/:strategyId
-	 * Body options:
-	 *  A) { accountId, sfStrategyId } – we fetch fields from SF
-	 *  B) { raw }                     – you pass raw payload directly
-	 *  C) { fieldsFromSalesforce }    – you pass the SF fields and we map
-	 *
-	 * Header:
-	 *  - meta-auth-token: token for CopyFactory (or use env META_AUTH_TOKEN)
-	 */
-	router.put("/create/:strategyId", auth, async (req, res) => {
-	  const strategyId = req.params?.strategyId;
-	  if (!strategyId) return res.status(400).json({ error: "Missing strategyId path param" });
+  /**
+   * PUT /api/meta/strategies/:strategyId
+   * Body options:
+   *  A) { accountId, sfStrategyId } – we fetch fields from SF
+   *  B) { raw }                     – you pass raw payload directly
+   *  C) { fieldsFromSalesforce }    – you pass the SF fields and we map
+   *
+   * Header:
+   *  - meta-auth-token: token for CopyFactory (or use env META_AUTH_TOKEN)
+   */
+  router.put("/create/:strategyId", auth, async (req, res) => {
+    const strategyId = req.params?.strategyId;
+    if (!strategyId) return res.status(400).json({ error: "Missing strategyId path param" });
 
-	  try {
-		let payload;
+    try {
+      let payload;
 
-		if (req.body?.raw && typeof req.body.raw === "object") {
-		  // Full control (already CopyFactory shape)
-		  payload = stripNulls(req.body.raw);
-		} else if (req.body?.fieldsFromSalesforce) {
-		  // Client posted SF fields; we map
-		  payload = mapToCopyFactoryPayload(req.body.fieldsFromSalesforce);
-		  if (req.body.accountId) payload.accountId = req.body.accountId;
-		} else if (req.body?.sfStrategyId) {
-		  // We’ll fetch the Strategy__c from SF and map it
-		  // NOTE: assumes you’ve logged into SF already and keep these in memory
-		  await sfLogin();//const { instanceUrl, accessToken } = require("../state/sfAuthState"); // wherever you store them
+      if (req.body?.raw && typeof req.body.raw === "object") {
+        // Full control (already CopyFactory shape)
+        payload = stripNulls(req.body.raw);
+      } else if (req.body?.fieldsFromSalesforce) {
+        // Client posted SF fields; we map
+        payload = mapToCopyFactoryPayload(req.body.fieldsFromSalesforce);
+        if (req.body.accountId) payload.accountId = req.body.accountId;
+      } else if (req.body?.sfStrategyId) {
+        // Fetch Strategy__c from SF and map it
+        await sfLogin();
+        const sfRec = await loadSfStrategy({
+          instanceUrl : authState.instanceUrl,
+          accessToken: authState.accessToken,
+          strategyId: req.body.sfStrategyId
+        });
+        if (!sfRec) return res.status(404).json({ error: "Salesforce Strategy__c not found" });
+        payload = mapToCopyFactoryPayload(sfRec);
+        if (req.body.accountId) payload.accountId = req.body.accountId;
+      } else {
+        return res.status(400).json({ error: "Provide raw, fieldsFromSalesforce, or sfStrategyId" });
+      }
 
-		  const sfRec = await loadSfStrategy({
-			instanceUrl : authState.instanceUrl,
-			accessToken: authState.accessToken,
-			strategyId: req.body.sfStrategyId
-		  });
-		  if (!sfRec) return res.status(404).json({ error: "Salesforce Strategy__c not found" });
-		  payload = mapToCopyFactoryPayload(sfRec);
-		  if (req.body.accountId) payload.accountId = req.body.accountId;
-		} else {
-		  return res.status(400).json({ error: "Provide raw, fieldsFromSalesforce, or sfStrategyId" });
-		}
+      if (!payload) return res.status(400).json({ error: "Unable to build payload (null)" });
 
-		if (!payload) return res.status(400).json({ error: "Unable to build payload (null)" });
+      const META_API_URL = process.env.META_API_COPYFACTORY ?? "https://copyfactory-api-v1.new-york.agiliumtrade.ai";
+      const authToken = req.get("meta-auth-token") || process.env.METATRADER_TOKEN;
+      if (!authToken) return res.status(401).json({ error: "Missing meta-auth-token" });
 
-		const META_API_URL = process.env.META_API_COPYFACTORY ?? "https://copyfactory-api-v1.new-york.agiliumtrade.ai";//process.env.META_API_URL ?? "https://copyfactory.metaanalytics.ai";
-		const authToken = req.get("meta-auth-token") || process.env.METATRADER_TOKEN;
-		if (!authToken) return res.status(401).json({ error: "Missing meta-auth-token" });
+      const url = `${META_API_URL}/users/current/configuration/strategies/${encodeURIComponent(strategyId)}`;
 
-		const url = `${META_API_URL}/users/current/configuration/strategies/${encodeURIComponent(strategyId)}`;
+      const putRes = await axios.put(url, payload, {
+        headers: {
+          "auth-token": authToken,
+          "content-type": "application/json"
+        },
+        timeout: 15000
+      });
 
-		const putRes = await axios.put(url, payload, {
-		  headers: {
-			"auth-token": authToken,
-			"content-type": "application/json"
-		  },
-		  timeout: 15000
-		});
-		
-
-		return res.status(putRes.status).json({
-		  status: putRes.status,
-		  statusText: putRes.statusText,
-		  body: putRes.data
-		});
-	  } catch (err) {
-		// Always return something informative
-		const status = err.response?.status ?? 500;
-		return res.status(status).json({
-		  error: "CopyFactory update failed",
-		  status,
-		  details: err.response?.data ?? err.message
-		});
-	  }
-	});
+      return res.status(putRes.status).json({
+        status: putRes.status,
+        statusText: putRes.statusText,
+        body: putRes.data
+      });
+    } catch (err) {
+      const status = err.response?.status ?? 500;
+      return res.status(status).json({
+        error: "CopyFactory update failed",
+        status,
+        details: err.response?.data ?? err.message
+      });
+    }
+  });
 
   return router;
 };
-
