@@ -191,7 +191,48 @@ async function createTradingAccount({
   return { id, state };
 }
 
+/**
+ * Fetch MetaTrader account info by MetaApi account UUID.
+ * Returns subset needed for Salesforce: { username, balance, currency }
+ * - username maps to MT login (string), but you can change this mapping if you prefer 'name'
+ *
+ * Null handling:
+ * - If response missing fields, returns nulls for those fields (never throws NPE).
+ */
+async function getEquityInfo(metaAccountId, { userToken } = {}) {
+  if (!metaAccountId) {
+    throw new Error("metaAccountId is required");
+  }
+
+  const url = `https://risk-management-api-v1.london.agiliumtrade.ai/users/current/accounts/${encodeURIComponent(metaAccountId)}/equity-chart`
+  //const url =`${METAAPI_BASE}/users/current/accounts/${encodeURIComponent(metaAccountId)}/account-information`;
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        "auth-token": `${userToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15_000,
+      validateStatus: (s) => s >= 200 && s < 500, // handle 4xx in code
+    });
+
+    if (res.status >= 400) {
+      throw new Error(`MetaApi error ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+
+    const data = res?.data ?? {};
+
+    return {
+      raw: data
+    };
+  } catch (err) {
+    // Keep the error informative but safe
+    const message = err?.message || "Unknown MetaApi error";
+    throw new Error(`Failed to fetch MetaTrader account info: ${message}`);
+  }
+}
+
 
 module.exports = {
-  fetchAccountInfo,  createTradingAccount
+  fetchAccountInfo,  createTradingAccount, getEquityInfo
 };

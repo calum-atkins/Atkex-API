@@ -1,6 +1,6 @@
 // routes/accounts.js
 const express = require("express");
-const { fetchAccountInfo, createTradingAccount } = require("../metaapi/accounts");
+const { fetchAccountInfo, createTradingAccount, getEquityInfo } = require("../metaapi/accounts");
 const { updateTradingAccount } = require("../salesforce/accounts");
 const { authState, sfLogin } = require("../middleware/auth");
 
@@ -76,13 +76,36 @@ function accountsRouter(auth, deps = {}) {
   
   
   router.post('/create-account', auth, async (req, res) => {
-  try {
-    const result = await createTradingAccount(req.body);
-    res.status(result.status || 200).json(result);
-  } catch (e) {
-    res.status(500).json({ error: e?.message || 'Unknown error' });
-  }
-});
+    try {
+      const result = await createTradingAccount(req.body);
+      res.status(result.status || 200).json(result);
+    } catch (e) {
+      res.status(500).json({ error: e?.message || 'Unknown error' });
+    }
+  });
+  
+  router.get('/equity-information', auth, async (req, res) => {
+    try {
+      const mtAccountId = (req.query.mtAccountId || req.body?.mtAccountId || "").trim();
+
+
+      if (!mtAccountId) {
+        return res.status(400).json({
+          error: "Missing required fields",
+          details: {
+            mtAccountId: !!mtAccountId,
+          },
+        });
+      }
+      const METAAPI_TOKEN = process.env.METATRADER_TOKEN;
+      const result = await getEquityInfo(mtAccountId, {
+        userToken: METAAPI_TOKEN,
+      });
+      res.status(result.status || 200).json(result);
+    } catch (e) {
+      res.status(500).json({ error: e?.message || 'Unknown error' });
+    }
+  });
 
   return router;
 }

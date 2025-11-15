@@ -29,7 +29,8 @@ function mergePreservingOpen(existing = {}, incoming = {}) {
     "X1st_Trade_Units__c",
     "Open_Date_Time__c",
     "Open_Comments__c",
-    "Open_Screenshot__c"
+    "Open_Screenshot__c",
+    "Balance_On_Open__c"
   ];// Side from your computed net; fixes the ternary that referenced entryType wrongly
   
 
@@ -112,6 +113,8 @@ module.exports = (auth, deps = {}) => {
       const sfAccountId = (req.query.sfAccountId || req.body?.sfAccountId || "").trim();
       const mtAccountId = (req.query.mtAccountId || req.body?.mtAccountId || "").trim();
       const accountCode = (req.query.accountCode || req.body?.accountCode || "").trim();
+      const openBalance = (req.query.openBalance || req.body?.openBalance || "").trim();
+      const parsedRValue = (req.query.rValue || req.body?.rValue || "").trim();
 
       if (!sfAccountId) {
         return res.status(400).json({ error: "Missing required parameter: sfAccountId" });
@@ -165,7 +168,10 @@ module.exports = (auth, deps = {}) => {
         const copy = { ...(h || {}) };
         // Ensure Account__c is always present for Salesforce side
         copy.Actual_Trading_Account__c = sfAccountId;
-        copy.UUID_Text__c = accountCode + "-" + copy.UUID_Text__c
+        copy.UUID_Text__c = accountCode + "-" + copy.UUID_Text__c;
+        const parsedBalance = parseFloat(openBalance);
+        copy.Balance_on_Open__c = isNaN(parsedBalance) ? 0 : parsedBalance;
+        copy.Realised_RR__c = copy.X1st_Trade_Profit__c / parsedRValue;
         return copy;
       });
 
