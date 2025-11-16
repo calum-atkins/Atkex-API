@@ -107,7 +107,7 @@ class SalesforceAuthManager {
           const state = await this.sfLogin({ force: true });
 
           // ⚠️ This logs the raw access token. Be careful in real prod logs.
-          console.log("[SF AUTH] Daily refresh complete. New access token:", state.accessToken);
+          console.log("[SF AUTH] Daily refresh complete. New access token:");
         } catch (e) {
           console.error("[SF AUTH] Daily refresh failed:", e.message);
         } finally {

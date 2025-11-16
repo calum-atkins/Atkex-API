@@ -33,7 +33,7 @@ const { auth, authState, sfLogin } = require("./middleware/auth");
         ttlSeconds: 300,
       });
       await symbolCatalog.init(); // warm the cache BEFORE serving traffic
-      console.log(`SymbolCatalog ready with ~${symbolCatalog.cache?.size || 0} symbols`);
+      console.log(`[DATA] SymbolCatalog ready with ~${symbolCatalog.cache?.size || 0} symbols`);
     } else {
       console.warn("SymbolCatalog skipped: missing SF_INSTANCE_URL or SF_ACCESS_TOKEN");
     }
@@ -54,7 +54,7 @@ const { auth, authState, sfLogin } = require("./middleware/auth");
   const server = http.createServer(app);
 
   server.listen(PORT, HOST, () => {
-    console.log(`Server running at http://${HOST}:${PORT}`);
+    console.log(`[SERVER] Server running at http://${HOST}:${PORT}`);
   });
 
   // Graceful shutdown
