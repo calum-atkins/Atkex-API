@@ -1,6 +1,6 @@
 // routes/accounts.js
 const express = require("express");
-const { fetchAccountInfo, createTradingAccount, getEquityInfo } = require("../metaapi/accounts");
+const { fetchAccountInfo, createTradingAccount, getEquityInfo, deploy, undeploy } = require("../metaapi/accounts");
 const { updateTradingAccount } = require("../salesforce/accounts");
 const { authState, sfLogin } = require("../middleware/auth");
 
@@ -99,6 +99,52 @@ function accountsRouter(auth, deps = {}) {
       }
       const METAAPI_TOKEN = process.env.METATRADER_TOKEN;
       const result = await getEquityInfo(mtAccountId, {
+        userToken: METAAPI_TOKEN,
+      });
+      res.status(result.status || 200).json(result);
+    } catch (e) {
+      res.status(500).json({ error: e?.message || 'Unknown error' });
+    }
+  });
+  
+  router.post('/deploy', auth, async (req, res) => {
+    try {
+      const mtAccountId = (req.query.mtAccountId || req.body?.mtAccountId || "").trim();
+
+
+      if (!mtAccountId) {
+        return res.status(400).json({
+          error: "Missing required fields",
+          details: {
+            mtAccountId: !!mtAccountId,
+          },
+        });
+      }
+      const METAAPI_TOKEN = process.env.METATRADER_TOKEN;
+      const result = await deploy(mtAccountId, {
+        userToken: METAAPI_TOKEN,
+      });
+      res.status(result.status || 200).json(result);
+    } catch (e) {
+      res.status(500).json({ error: e?.message || 'Unknown error' });
+    }
+  });
+  
+  router.post('/undeploy', auth, async (req, res) => {
+    try {
+      const mtAccountId = (req.query.mtAccountId || req.body?.mtAccountId || "").trim();
+
+
+      if (!mtAccountId) {
+        return res.status(400).json({
+          error: "Missing required fields",
+          details: {
+            mtAccountId: !!mtAccountId,
+          },
+        });
+      }
+      const METAAPI_TOKEN = process.env.METATRADER_TOKEN;
+      const result = await undeploy(mtAccountId, {
         userToken: METAAPI_TOKEN,
       });
       res.status(result.status || 200).json(result);

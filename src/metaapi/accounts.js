@@ -232,7 +232,72 @@ async function getEquityInfo(metaAccountId, { userToken } = {}) {
   }
 }
 
+async function deploy(metaAccountId, { userToken } = {}) {
+  if (!metaAccountId) {
+    throw new Error("metaAccountId is required");
+  }
+
+  const url = `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${encodeURIComponent(metaAccountId)}/deploy`
+  //const url =`${METAAPI_BASE}/users/current/accounts/${encodeURIComponent(metaAccountId)}/account-information`;
+  try {
+    const res = await axios.post(url, {}, {
+      headers: {
+        "auth-token": `${userToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15_000,
+      validateStatus: (s) => s >= 200 && s < 500, // handle 4xx in code
+    });
+
+    if (res.status >= 400) {
+      throw new Error(`MetaApi error ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+
+    const data = res?.data ?? {};
+
+    return {
+      raw: data
+    };
+  } catch (err) {
+    // Keep the error informative but safe
+    const message = err?.message || "Unknown MetaApi error";
+    throw new Error(`Failed to deploy metatrader account: ${message}`);
+  }
+}
+
+async function undeploy(metaAccountId, { userToken } = {}) {
+  if (!metaAccountId) {
+    throw new Error("metaAccountId is required");
+  }
+
+  const url = `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${encodeURIComponent(metaAccountId)}/undeploy`
+  //const url =`${METAAPI_BASE}/users/current/accounts/${encodeURIComponent(metaAccountId)}/account-information`;
+  try {
+    const res = await axios.post(url, {}, {
+      headers: {
+        "auth-token": `${userToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 15_000,
+      validateStatus: (s) => s >= 200 && s < 500, // handle 4xx in code
+    });
+
+    if (res.status >= 400) {
+      throw new Error(`MetaApi error ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+
+    const data = res?.data ?? {};
+
+    return {
+      raw: data
+    };
+  } catch (err) {
+    // Keep the error informative but safe
+    const message = err?.message || "Unknown MetaApi error";
+    throw new Error(`Failed to deploy metatrader account: ${message}`);
+  }
+}
 
 module.exports = {
-  fetchAccountInfo,  createTradingAccount, getEquityInfo
+  fetchAccountInfo,  createTradingAccount, getEquityInfo, deploy, undeploy
 };
