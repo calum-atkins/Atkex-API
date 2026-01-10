@@ -90,6 +90,17 @@ class SalesforceAuthManager {
     const runHour = 2; // 02:00 server local time
     
     console.log("[SF AUTH] Daily refresh: Starting daily refresh...");
+    
+    // 🔹 RUN ONCE IMMEDIATELY (TEST / STARTUP CONFIRMATION)
+    (async () => {
+      try {
+        console.log("[SF AUTH] Immediate refresh for startup test...");
+        await this.sfLogin({ force: true });
+        console.log("[SF AUTH] Immediate refresh successful.");
+      } catch (e) {
+        console.error("[SF AUTH] Immediate refresh failed:", e.message);
+      }
+    })();
 
     const scheduleNext = () => {
       const now = new Date();
