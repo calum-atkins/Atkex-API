@@ -30,7 +30,8 @@ function mergePreservingOpen(existing = {}, incoming = {}) {
     "Open_Date_Time__c",
     "Open_Comments__c",
     "Open_Screenshot__c",
-    "Balance_On_Open__c"
+    "Balance_On_Open__c",
+    "Fees__c"
   ];// Side from your computed net; fixes the ternary that referenced entryType wrongly
   
 
@@ -67,7 +68,7 @@ async function fetchExistingHedgesByUUID({ instanceUrl, accessToken, uuids = [] 
   for (const ch of chunks) {
     const quoted = ch.map(u => `'${String(u).replace(/'/g, "\\'")}'`).join(",");
     const soql =
-      `SELECT Id, UUID_Text__c, Side__c,X1st_Trade_Open_Price__c, X1st_Trade_Units__c,Open_Date_Time__c,Open_Comments__c,Open_Screenshot__c 
+      `SELECT Id, UUID_Text__c, Side__c,X1st_Trade_Open_Price__c, X1st_Trade_Units__c,Open_Date_Time__c,Open_Comments__c,Open_Screenshot__c, Fees__c 
          FROM SR_Hedge__c
         WHERE UUID_Text__c IN (${quoted})`;
 
@@ -171,7 +172,13 @@ module.exports = (auth, deps = {}) => {
         copy.UUID_Text__c = accountCode + "-" + copy.UUID_Text__c;
         const parsedBalance = parseFloat(openBalance);
         copy.Balance_on_Open__c = isNaN(parsedBalance) ? 0 : parsedBalance;
-        copy.Realised_RR__c = copy.X1st_Trade_Profit__c / parsedRValue;
+
+        const grossProfit = Number(copy.X1st_Trade_Profit__c) || 0;
+        const fees = Number(copy.Fees__c) || 0; // Fees__c will be negative typically
+        const netProfit = grossProfit + fees;
+
+        copy.Realised_RR__c = parsedRValue ? (netProfit / parsedRValue) : 0;
+
         return copy;
       });
 

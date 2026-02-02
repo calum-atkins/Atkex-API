@@ -54,6 +54,8 @@ function consolidateDealsToHedges(
     const totalCommission = arr.reduce((s, x) => s + (Number(x.commission) || 0), 0);
     const totalSwap       = arr.reduce((s, x) => s + (Number(x.swap) || 0), 0);
 
+    const totalFees = totalCommission + totalSwap;
+
     // determine side from IN legs (robust for partial-ins)
     // net > 0 => BUY bias, net < 0 => SELL bias
     let net = 0;
@@ -102,6 +104,7 @@ function consolidateDealsToHedges(
 
       // Profit consolidation (you said profit was fine)
       X1st_Trade_Profit__c: totalProfit,
+      Fees__c: outs.length ? totalFees : null,
 
       // OPEN fields (from first IN)
       X1st_Trade_Open_Price__c: firstIn ? firstIn.price : null,
