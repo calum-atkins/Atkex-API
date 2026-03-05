@@ -1,6 +1,6 @@
 // routes/accounts.js
 const express = require("express");
-const { fetchAccountInfo, createTradingAccount, getEquityInfo, deploy, undeploy } = require("../metaapi/accounts");
+const { fetchAccountInfo, createTradingAccount, getEquityInfo, deploy, undeploy, enableAccountFeatures } = require("../metaapi/accounts");
 const { updateTradingAccount } = require("../salesforce/accounts");
 const { authState, sfLogin } = require("../middleware/auth");
 
@@ -150,6 +150,43 @@ function accountsRouter(auth, deps = {}) {
       res.status(result.status || 200).json(result);
     } catch (e) {
       res.status(500).json({ error: e?.message || 'Unknown error' });
+    }
+  });
+
+  /**
+   * Enable account features/APIs on an existing MetaApi account.
+   * Used to enable CopyFactory roles (copy trading) after account creation.
+   *
+   * POST /api/accounts/enable-features
+   * Body: { accountId, role: "PROVIDER"|"SUBSCRIBER", copyFactoryResourceSlots?: number }
+   */
+  router.post('/enable-features', auth, async (req, res) => {
+    try {
+      const accountId = (req.body?.accountId || req.query?.accountId || '').trim();
+      const roleRaw = (req.body?.role || req.query?.role || '').trim();
+      const role = roleRaw.toUpperCase();
+      const slots = Number(req.body?.copyFactoryResourceSlots ?? 1);
+
+      if (!accountId) {
+        return res.status(400).json({ error: 'accountId is required' });
+      }
+      if (!['PROVIDER', 'SUBSCRIBER'].includes(role)) {
+        return res.status(400).json({ error: 'role must be PROVIDER or SUBSCRIBER' });
+      }
+
+      const METAAPI_TOKEN = process.env.METATRADER_TOKEN;
+      if (!METAAPI_TOKEN) return res.status(500).json({ error: 'Server missing METATRADER_TOKEN' });
+
+      const result = await enableAccountFeatures(accountId, {
+        userToken: METAAPI_TOKEN,
+        copyFactoryRoles: [role],
+        copyFactoryResourceSlots: Number.isFinite(slots) && slots > 0 ? slots : 1,
+      });
+
+      // MetaApi docs show 204 for success (no content). We return ok for hub/SF.
+      return res.status(200).json({ ok: true, metaapiStatus: result?.status ?? null, raw: result?.raw ?? null });
+    } catch (e) {
+      return res.status(400).json({ error: e?.message || 'enable-features failed' });
     }
   });
 

@@ -22,6 +22,39 @@ function isNum(n){ return typeof n === "number" && Number.isFinite(n); }
 function mergePreservingOpen(existing = {}, incoming = {}) {
   const out = { ...existing, ...incoming };
 
+  // --- Fees merge rules (handles brokers that book fees on entry vs exit)
+  // If a trade was created with entry fees, and later close deals report 0 fees,
+  // we must NOT overwrite the stored Fees__c. If close fees differ, we combine.
+  const isClosingUpdate =
+    incoming.Close_Date_Time__c != null ||
+    incoming.Closing_Comments__c != null ||
+    incoming.Close_Screenshot__c != null;
+
+  const existingFeesNum = Number(existing?.Fees__c);
+  const incomingFeesNum = Number(incoming?.Fees__c);
+  const hasExistingFees = Number.isFinite(existingFeesNum);
+  const hasIncomingFees = Number.isFinite(incomingFeesNum);
+
+  if (isClosingUpdate && hasExistingFees && hasIncomingFees) {
+    // If incoming is 0 (common when broker books all fees on entry) OR identical, keep existing.
+    if (incomingFeesNum === 0 || incomingFeesNum === existingFeesNum) {
+      // close payload has no fee info, or matches exactly -> keep existing
+      out.Fees__c = existingFeesNum;
+    } else if (existingFeesNum === 0) {
+      // no entry fees stored yet -> take incoming
+      out.Fees__c = incomingFeesNum;
+    } else if (Math.abs(incomingFeesNum) >= Math.abs(existingFeesNum)) {
+      // incoming looks like TOTAL fees (already includes entry) -> use incoming, don't add
+      out.Fees__c = incomingFeesNum;
+    } else {
+      // incoming looks like EXIT-only fees -> add
+      out.Fees__c = existingFeesNum + incomingFeesNum;
+    }
+  } else if (hasExistingFees && !hasIncomingFees) {
+    // Never wipe Fees__c when incoming doesn't have a usable value
+    out.Fees__c = existingFeesNum;
+  }
+
   // Fields you said were being wiped:
   const preserveIfMissing = [ 
     "Side__c",                  // BUY/SELL
@@ -173,11 +206,9 @@ module.exports = (auth, deps = {}) => {
         const parsedBalance = parseFloat(openBalance);
         copy.Balance_on_Open__c = isNaN(parsedBalance) ? 0 : parsedBalance;
 
-        const grossProfit = Number(copy.X1st_Trade_Profit__c) || 0;
-        const fees = Number(copy.Fees__c) || 0; // Fees__c will be negative typically
-        const netProfit = grossProfit + fees;
-
-        copy.Realised_RR__c = parsedRValue ? (netProfit / parsedRValue) : 0;
+        // Realised_RR__c is computed AFTER merging with existing records,
+        // because Fees__c may need to be combined (entry + exit) depending on broker behaviour.
+        copy.Realised_RR__c = 0;
 
         return copy;
       });
@@ -209,6 +240,14 @@ module.exports = (auth, deps = {}) => {
         const existing = key ? existingByUUID.get(key) : null;
         return existing ? mergePreservingOpen(existing, incoming) : mergePreservingOpen({}, incoming);
       });
+
+      // --- 4.6) Recompute realised R using the *merged* Fees__c
+      for (const r of mergedForUpsert) {
+        const grossProfit = Number(r?.X1st_Trade_Profit__c) || 0;
+        const fees = Number(r?.Fees__c) || 0; // fees are usually negative
+        const netProfit = grossProfit + fees;
+        r.Realised_RR__c = parsedRValue ? (netProfit / Number(parsedRValue)) : 0;
+      }
 
       // --- 5) Batch upsert in a single call (no DML in loops)
       let sfResults = [];

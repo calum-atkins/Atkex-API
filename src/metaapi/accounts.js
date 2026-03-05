@@ -298,6 +298,72 @@ async function undeploy(metaAccountId, { userToken } = {}) {
   }
 }
 
+/**
+ * Enable features or APIs for an existing MetaApi trading account.
+ * Docs: POST /users/current/accounts/{accountId}/enable-account-features
+ *
+ * Used for enabling CopyFactory (copy trading) on an already-created account.
+ */
+async function enableAccountFeatures(metaAccountId, {
+  userToken,
+  copyFactoryRoles = [],
+  copyFactoryResourceSlots = 1,
+  riskManagementApiEnabled,
+  metatraderStatsApiEnabled,
+  reliabilityIncreased,
+  allocateDedicatedIp,
+} = {}) {
+  if (!metaAccountId) throw new Error('metaAccountId is required');
+  if (!userToken) throw new Error('MetaApi userToken (bearer) is required');
+  const baseUrl = 'https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai'
+  const url = `${baseUrl}/users/current/accounts/${encodeURIComponent(metaAccountId)}/enable-account-features`;
+
+  const body = {};
+
+  // CopyFactory payload
+  if (Array.isArray(copyFactoryRoles) && copyFactoryRoles.length) {
+    body.copyFactoryApi = {
+      copyFactoryRoles,
+      copyFactoryResourceSlots: Number(copyFactoryResourceSlots || 1),
+    };
+  }
+
+  // Optional paid features (only include if explicitly provided)
+  if (typeof riskManagementApiEnabled === 'boolean') body.riskManagementApiEnabled = riskManagementApiEnabled;
+  if (typeof metatraderStatsApiEnabled === 'boolean') body.metatraderStatsApiEnabled = metatraderStatsApiEnabled;
+  if (typeof reliabilityIncreased === 'boolean') body.reliabilityIncreased = reliabilityIncreased;
+  if (allocateDedicatedIp) body.allocateDedicatedIp = allocateDedicatedIp;
+
+  // 32-char transaction id (no dashes)
+  const txId = crypto.randomUUID().replace(/-/g, '');
+
+  try {
+    const res = await axios.post(url, body, {
+      headers: {
+        'auth-token': `${userToken}`,
+        'transaction-id': txId,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30_000,
+      validateStatus: (s) => s >= 200 && s < 500,
+    });
+
+    if (res.status >= 400) {
+      throw new Error(`MetaApi error ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+
+    return { status: res.status, raw: res.data ?? null };
+  } catch (err) {
+    const message = err?.message || 'Unknown MetaApi error';
+    throw new Error(`Failed to enable account features: ${message}`);
+  }
+}
+
 module.exports = {
-  fetchAccountInfo,  createTradingAccount, getEquityInfo, deploy, undeploy
+  fetchAccountInfo,
+  createTradingAccount,
+  getEquityInfo,
+  deploy,
+  undeploy,
+  enableAccountFeatures
 };

@@ -1,6 +1,5 @@
 /**
  * Consolidate an array of MT5 deals into 1 record per positionId.
- * (Your original body unchanged)
  */
 function consolidateDealsToHedges(
   deals,
@@ -10,7 +9,7 @@ function consolidateDealsToHedges(
   const tradeDeals = deals.filter(
     d => d.entryType === "DEAL_ENTRY_IN" || d.entryType === "DEAL_ENTRY_OUT"
   );
-  
+
   // group by positionId; fallback to orderId -> id
   const groups = new Map();
   for (const d of tradeDeals) {
@@ -32,15 +31,12 @@ function consolidateDealsToHedges(
     // derive some basics
     const any = arr[0] || {};
     const symbol   = any.symbol || null;
-    const platform = any.platform || null;
 
     // open leg (first IN)
     const firstIn = ins[0];
     const openTime = firstIn ? firstIn.time : null;
-    const openPrice = firstIn ? firstIn.price : null;
 
     // sums/volumes
-    const totalInVolume  = ins.reduce((s, x) => s + (x.volume || 0), 0);
     const totalOutVolume = outs.reduce((s, x) => s + (x.volume || 0), 0);
 
     // Close aggregation (volume-weighted)
@@ -50,14 +46,33 @@ function consolidateDealsToHedges(
     const closePrice = totalOutVolume > 0 ? wCloseNum / totalOutVolume : null;
 
     // money
-    const totalProfit     = arr.reduce((s, x) => s + (Number(x.profit) || 0), 0);
-    const totalCommission = arr.reduce((s, x) => s + (Number(x.commission) || 0), 0);
-    const totalSwap       = arr.reduce((s, x) => s + (Number(x.swap) || 0), 0);
+    const totalProfit = arr.reduce((s, x) => s + (Number(x.profit) || 0), 0);
 
-    const totalFees = totalCommission + totalSwap;
+    // --- FEES (CRITICAL FIX) ---
+    // Support brokers that book commission/swap on entry OR exit OR split across both.
+    // For incremental upserts:
+    //  - OPEN trade (no OUT legs): send entry-fees (IN)
+    //  - CLOSED trade (has OUT legs): send exit-fees (OUT) only; SF merge combines.
+    const inFees = ins.reduce(
+      (s, x) => s + (Number(x.commission) || 0) + (Number(x.swap) || 0),
+      0
+    );
+    const outFees = outs.reduce(
+      (s, x) => s + (Number(x.commission) || 0) + (Number(x.swap) || 0),
+      0
+    );
+
+    // Key rule:
+    // - If we have BOTH IN and OUT in this same payload, send TOTAL (in+out).
+    //   This covers your exact example where commission is on the IN but the trade is already closed in the payload.
+    // - If only IN exists (open trade), send IN fees.
+    // - If only OUT exists (rare), send OUT fees.
+    const feesToSend =
+      ins.length && outs.length ? (inFees + outFees)
+      : outs.length ? outFees
+      : inFees;
 
     // determine side from IN legs (robust for partial-ins)
-    // net > 0 => BUY bias, net < 0 => SELL bias
     let net = 0;
     for (const i of ins) {
       if (i.type === "DEAL_TYPE_BUY")  net += (i.volume || 0);
@@ -68,19 +83,10 @@ function consolidateDealsToHedges(
     else if (net < 0) side = "SELL";
     else if (firstIn) side = (firstIn.type === "DEAL_TYPE_SELL" ? "SELL" : "BUY");
 
-    // optional: first OUT profit if you want that meaning for X1st_Trade_Profit__c
-    const firstOutProfit = outs.length ? Number(outs[0].profit) || 0 : 0;
-    
-    const entryType = any.entryType;
-    const time = any.time;
-    const price = any.price;
-    const volume = any.volume;
-    const profit = any.profit;
-    
     // Outcome + SL/TP extraction from OUT deals
     const { outcome, slPrice, tpPrice } = deriveOutcomeAndStops(outs);
-    
-    // Build SR_Hedge__c record (fixed)
+
+    // Build SR_Hedge__c record
     const currencyId =
       symbol &&
       symbolCatalog &&
@@ -88,39 +94,31 @@ function consolidateDealsToHedges(
         ? (symbolCatalog.getIdBySymbolName(symbol) || null)
         : null;
 
-    // prefer explicit first OUT for "first close price" semantics;
-    // keep volume-weighted closePrice for the consolidated close price.
     const firstOut = outs.length ? outs[0] : null;
 
     const rec = {
       UUID_Text__c: positionKey,
       attributes: { type: "SR_Hedge__c" },
 
-      // Safe symbol lookup
       Currency__c: currencyId,
-
-      // Side from your computed net; fixes the ternary that referenced entryType wrongly
       Side__c: side,
 
-      // Profit consolidation (you said profit was fine)
       X1st_Trade_Profit__c: totalProfit,
-      Fees__c: outs.length ? totalFees : null,
+      Fees__c: feesToSend,
 
-      // OPEN fields (from first IN)
+      // OPEN fields
       X1st_Trade_Open_Price__c: firstIn ? firstIn.price : null,
       Open_Date_Time__c: openTime || null,
       X1st_Trade_Units__c: firstIn ? firstIn.volume : null,
       Open_Comments__c: firstIn ? "API" : null,
       Open_Screenshot__c: firstIn ? "API" : null,
 
-      // CLOSE fields (from OUT legs; use last OUT time and either first OUT price or VWAP)
-      // If you want the consolidated close price, use `closePrice`; if you want first OUT, use `firstOut?.price`.
+      // CLOSE fields
       X1st_Trade_Close_Price__c: firstOut ? firstOut.price : (closePrice ?? null),
       Close_Date_Time__c: closeTime || null,
       Closing_Comments__c: outs.length ? "API" : null,
       Close_Screenshot__c: outs.length ? "API" : null,
-      
-      // Reason outing
+
       Outcome__c: outcome || null,
       Stop_Loss_Price__c: slPrice != null && isFinite(slPrice) ? slPrice : null,
       Take_Profit_Price__c: tpPrice != null && isFinite(tpPrice) ? tpPrice : null,
@@ -131,6 +129,7 @@ function consolidateDealsToHedges(
 
   return hedges;
 }
+
 
 // Helper: parse [sl 3628.00] or [tp 3628.00] from brokerComment
 function parseSlTpFromComment(comment) {
